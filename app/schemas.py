@@ -117,6 +117,16 @@ class JointAngles(BaseModel):
     hip_angle: float | None = None
     trunk_angle: float | None = None
     trunk_forward_lean: float | None = None
+    left_knee_angle: float | None = None
+    right_knee_angle: float | None = None
+    left_hip_angle: float | None = None
+    right_hip_angle: float | None = None
+    left_elbow_angle: float | None = None
+    right_elbow_angle: float | None = None
+    left_shoulder_angle: float | None = None
+    right_shoulder_angle: float | None = None
+    body_line_angle: float | None = None
+    stance_width: float | None = None
 
 
 class PoseCleaningResult(BaseModel):
@@ -241,9 +251,25 @@ class TrainingLoadResult(BaseModel):
     reason: str
 
 
-class PoseAlgorithmRequest(BaseModel):
+class PoseCandidate(BaseModel):
+    person_id: str | int | None = None
     keypoints: dict[str, RawKeypoint]
-    exercise: Literal["squat"] = "squat"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
+
+
+class PoseAlgorithmRequest(BaseModel):
+    keypoints: dict[str, RawKeypoint] = Field(default_factory=dict)
+    pose_candidates: list[PoseCandidate] = Field(default_factory=list)
+    exercise: Literal[
+        "squat",
+        "push_up",
+        "lunge",
+        "plank",
+        "jumping_jack",
+        "sit_up",
+        "high_knees",
+    ] = "squat"
     timestamp: float | None = None
     frame_index: int | None = None
     age: int = Field(default=20, ge=1, le=120)
@@ -286,8 +312,16 @@ class PoseAlgorithmRequest(BaseModel):
 
 
 class PoseAlgorithmResult(BaseModel):
-    exercise: Literal["squat"]
-    stage: Literal["standing", "descending", "bottom", "ascending", "unknown"]
+    exercise: Literal[
+        "squat",
+        "push_up",
+        "lunge",
+        "plank",
+        "jumping_jack",
+        "sit_up",
+        "high_knees",
+    ]
+    stage: str
     rep_count: int
     completed_rep: bool
     cleaning: PoseCleaningResult
@@ -378,8 +412,17 @@ class RealtimeCoachResponse(BaseModel):
 class PipelineAnalyzeRequest(BaseModel):
     user_id: str = "default"
     session_id: str | None = None
-    keypoints: dict[str, RawKeypoint]
-    exercise: Literal["squat"] = "squat"
+    keypoints: dict[str, RawKeypoint] = Field(default_factory=dict)
+    pose_candidates: list[PoseCandidate] = Field(default_factory=list)
+    exercise: Literal[
+        "squat",
+        "push_up",
+        "lunge",
+        "plank",
+        "jumping_jack",
+        "sit_up",
+        "high_knees",
+    ] = "squat"
     timestamp: float | None = None
     frame_index: int | None = None
     watch: WatchHealthData | None = None
