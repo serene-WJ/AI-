@@ -1,0 +1,1 @@
+"""AI sports assistant backend."""
