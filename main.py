@@ -3,13 +3,15 @@ from __future__ import annotations
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 
 from app.algorithm_service import pose_algorithm_engine
+from app.coaching_service import build_frontend_effect, forward_to_voice_agent
 from app.health_service import (
     import_healthkit_samples,
+    ingest_shortcut_heart_rate,
     ingest_watch_health,
     latest_healthkit_samples,
     latest_watch_health,
 )
-from app.llm_service import ask_llm, build_training_report
+from app.llm_service import ask_llm, build_training_report, generate_realtime_commentary
 from app.schemas import (
     AskRequest,
     AskResponse,
@@ -22,6 +24,10 @@ from app.schemas import (
     PipelineAnalyzeResponse,
     PoseAlgorithmRequest,
     PoseAlgorithmResponse,
+    RealtimeCoachRequest,
+    RealtimeCoachResponse,
+    ShortcutHeartRateRequest,
+    ShortcutHeartRateResponse,
     TrainingContext,
     TrainingReportRequest,
     TrainingReportResponse,
@@ -119,6 +125,14 @@ def ingest_watch(data: WatchHealthData) -> WatchHealthResponse:
     return WatchHealthResponse(health=ingest_watch_health(data))
 
 
+@app.post("/ingest/shortcut/heart-rate", response_model=ShortcutHeartRateResponse)
+def ingest_shortcut_heart_rate_sample(request: ShortcutHeartRateRequest) -> ShortcutHeartRateResponse:
+    try:
+        return ingest_shortcut_heart_rate(request)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/ingest/healthkit", response_model=HealthKitImportResponse)
 def ingest_healthkit(request: HealthKitImportRequest) -> HealthKitImportResponse:
     try:
@@ -167,10 +181,39 @@ def reset_pose_state() -> dict[str, str]:
 @app.post("/training/report", response_model=TrainingReportResponse)
 def training_report(request: TrainingReportRequest) -> TrainingReportResponse:
     try:
-        report = build_training_report(request.result, request.goal)
+        report = build_training_report(request)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return TrainingReportResponse(report=report, result=request.result)
+    return TrainingReportResponse(
+        report=report,
+        result=request.result,
+        results=request.results,
+        snapshots=request.snapshots,
+    )
+
+
+@app.post("/llm/realtime-coach", response_model=RealtimeCoachResponse)
+def realtime_coach(request: RealtimeCoachRequest) -> RealtimeCoachResponse:
+    try:
+        commentary = generate_realtime_commentary(request)
+        effect = build_frontend_effect(request.result)
+        voice_forwarded = False
+        voice_response = None
+        if request.send_to_voice_agent:
+            voice_forwarded, voice_response = forward_to_voice_agent(
+                commentary,
+                user_id=request.user_id,
+                session_id=request.session_id,
+            )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return RealtimeCoachResponse(
+        commentary=commentary,
+        frontend_effect=effect,
+        voice_forwarded=voice_forwarded,
+        voice_response=voice_response,
+        result=request.result,
+    )
 
 
 @app.post("/pipeline/analyze", response_model=PipelineAnalyzeResponse)
