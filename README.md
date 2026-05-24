@@ -29,6 +29,8 @@ Apple Watch / HealthKit 心率睡眠数据
 - 姿态规则算法：支持关键点清洗、关节角度计算、深蹲阶段识别、后端状态机计数、动作质量评分、心率安全线、训练容量建议。
 - Pipeline 总入口：把姿态数据、最新手表数据、算法结果、DeepSeek 报告串起来。
 - DeepSeek 训练报告：把规则算法结果交给 LLM，总结运动建议和训练报告，LLM 不负责计数。
+- 实时语音教练：DeepSeek 生成短句吐槽，后端可转发给豆包语音智能体。
+- 前端特效指令：后端根据动作评分返回 `perfect`、`excellent`、`good` 指令，前端负责渲染动画和播放特效声音。
 - 可选 MCP server：把 YOLO 能力暴露成 Agent 可调用工具。
 
 ## 运行
@@ -51,12 +53,14 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `POST /ask`
 - `POST /ingest/yolo/scene`
 - `POST /ingest/watch`
+- `POST /ingest/shortcut/heart-rate`
 - `POST /ingest/healthkit`
 - `GET /watch/latest`
 - `GET /watch/samples`
 - `POST /pose/analyze`
 - `POST /pose/reset`
 - `POST /pipeline/analyze`
+- `POST /llm/realtime-coach`
 - `POST /training/report`
 
 ## 推荐联调顺序
@@ -66,6 +70,59 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 后端不直接读取 Apple Watch。实际产品接入时，由 iOS App / Watch App 向用户申请 HealthKit 权限，读取心率和睡眠数据后，再把 JSON 发给后端。
 
 这一步不是“临时跑通”，而是产品架构本身：Apple Watch 数据必须先经过 iPhone / Watch App 的授权读取，后端只能接收 App 上传的数据。仓库里的 `scripts/import_apple_health.py` 只是开发和验收工具，用来在没有 iOS App 时模拟 HealthKit 上传。
+
+如果你现在只有 iPhone、没有 Mac，可以先用 iPhone 的“快捷指令”App 采集 Apple 健康里的最近一次心率，然后发到后端：
+
+```http
+POST /ingest/shortcut/heart-rate
+```
+
+```json
+{
+  "user_id": "demo_user",
+  "session_id": "squat_2026_05_24",
+  "age": 20,
+  "heartRate": 86,
+  "timestamp": "2026-05-24T10:30:00Z"
+}
+```
+
+这个接口也兼容 `heart_rate`、`value` 或 `bpm` 字段。后端会把它保存为 `heart_rate` 原始样本，并同步更新 `/watch/latest`，所以后面的 `/pipeline/analyze` 可以继续使用最近心率。
+
+#### iPhone 快捷指令配置
+
+1. 电脑启动后端：
+
+```powershell
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+2. 确认电脑和 iPhone 在同一个 Wi-Fi 下，找到电脑局域网 IP，例如 `192.168.1.20`。
+3. iPhone 打开“快捷指令”，新建快捷指令。
+4. 添加动作“查找健康样本”：
+   - 类型选择“心率”
+   - 排序选择“结束日期”，最新在前
+   - 限制数量为 `1`
+5. 添加动作“获取列表中的项目”，选择“第一项”。
+6. 添加动作“获取健康样本的详细信息”，取“值”。
+7. 添加动作“文本”或“词典”，组装 JSON。最简单可以先只发心率：
+
+```json
+{
+  "user_id": "demo_user",
+  "age": 20,
+  "heartRate": 心率值
+}
+```
+
+8. 添加动作“获取 URL 内容”：
+   - URL：`http://电脑局域网IP:8000/ingest/shortcut/heart-rate`
+   - 方法：`POST`
+   - 请求正文：`JSON`
+   - Header：`Content-Type` = `application/json`
+9. 运行快捷指令，第一次会要求允许读取健康数据和访问局域网。
+
+要做到“定期收集”，可以在快捷指令 App 的“自动化”里创建个人自动化，比如打开训练 App 时运行、到达某个时间运行、或手动点一下运行。iOS 对后台频率有限制，所以它更适合“能收集、能接入项目”，不是稳定秒级实时流。
 
 推荐使用批量导入接口：
 
@@ -313,7 +370,120 @@ POST /pipeline/analyze
 
 `POST /pose/reset` 会清空深蹲阶段和计数状态，适合新训练开始前调用。
 
-`POST /training/report` 接收 `/pose/analyze` 返回的 `result`，调用 DeepSeek 生成中文训练建议和训练报告。
+## LLM 输出与语音播报
+
+### 实时吐槽和前端特效
+
+训练过程中，每次算法得到 `PoseAlgorithmResult` 后，可以调用：
+
+```http
+POST /llm/realtime-coach
+```
+
+请求：
+
+```json
+{
+  "user_id": "demo_user",
+  "session_id": "squat_2026_05_24",
+  "style": "playful",
+  "send_to_voice_agent": true,
+  "result": {
+    "...": "这里放 /pose/analyze 或 /pipeline/analyze 返回的 result"
+  }
+}
+```
+
+响应：
+
+```json
+{
+  "commentary": "膝盖别往里扣，稳住",
+  "frontend_effect": {
+    "name": "good",
+    "trigger": true,
+    "message": "good",
+    "sound": "good",
+    "min_score": 80
+  },
+  "voice_forwarded": true
+}
+```
+
+特效判断不交给 DeepSeek，后端按分数确定：
+
+- `quality_score >= 100`：`perfect`
+- `quality_score >= 90`：`excellent`
+- `quality_score >= 80`：`good`
+- 低于 80：不触发特效
+
+前端拿到 `frontend_effect` 后自己渲染动画和播放声音即可，不需要再投给视觉 AI。DeepSeek 只负责生成实时吐槽文字。
+
+豆包语音智能体通过环境变量配置：
+
+```powershell
+VOICE_AGENT_URL=http://localhost:5000/run
+VOICE_AGENT_API_KEY=your-token-if-needed
+```
+
+后端会向 `VOICE_AGENT_URL` 发送：
+
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "膝盖别往里扣，稳住"
+    }
+  ],
+  "metadata": {
+    "user_id": "demo_user",
+    "session_id": "squat_2026_05_24",
+    "source": "ai_sports_assistant"
+  }
+}
+```
+
+### 训练结束报告
+
+训练结束后调用：
+
+```http
+POST /training/report
+```
+
+报告接口支持传入一整段训练过程的 `results` 和动作截图引用 `snapshots`。截图不是 DeepSeek 截出来的，需要前端或视觉模块在关键帧保存截图，然后把 `image_url`、`image_base64` 或 `snapshot_id` 传给后端。
+
+示例结构：
+
+```json
+{
+  "goal": "生成本次深蹲训练报告",
+  "session": {
+    "user_id": "demo_user",
+    "session_id": "squat_2026_05_24",
+    "exercise": "squat",
+    "total_reps": 12,
+    "average_score": 86.5,
+    "best_score": 100,
+    "lowest_score": 72
+  },
+  "results": [
+    {"...": "多个 PoseAlgorithmResult"}
+  ],
+  "snapshots": [
+    {
+      "snapshot_id": "rep_3_bottom",
+      "title": "第 3 次深蹲最低点",
+      "image_url": "http://127.0.0.1:8000/static/snapshots/rep_3_bottom.jpg",
+      "related_errors": ["knee_inward"],
+      "note": "算法检测到膝盖内扣"
+    }
+  ]
+}
+```
+
+DeepSeek 会生成完整中文报告，包含动作评分、动作拆解评价、每张截图对应的优势点评、尚待提升、提升建议和鼓励。
 
 ## 树莓派建议
 
