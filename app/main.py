@@ -232,6 +232,7 @@ def pipeline_analyze(request: PipelineAnalyzeRequest) -> PipelineAnalyzeResponse
 
     algorithm_request = PoseAlgorithmRequest(
         keypoints=request.keypoints,
+        pose_candidates=request.pose_candidates,
         exercise=request.exercise,
         timestamp=request.timestamp,
         frame_index=request.frame_index,
