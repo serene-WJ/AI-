@@ -34,14 +34,24 @@ class PoseAlgorithmEngine:
         raw_keypoints = self._select_person_keypoints(request, state)
         cleaning = self._clean_pose(raw_keypoints, state)
         angles = self._calculate_angles(cleaning)
-        stage, primary_value = self._recognize_stage(request.exercise, angles, cleaning, state)
-        completed_rep = self._update_counter(request.exercise, stage, state)
-        quality = self._score_quality(request.exercise, cleaning, angles, stage, state)
         heart_rate_safety = (
             self._check_heart_rate(request.age, request.heart_rate)
             if request.heart_rate is not None
             else None
         )
+        safety_stopped = heart_rate_safety is not None and heart_rate_safety.status == "stop"
+
+        stage, primary_value = self._recognize_stage(request.exercise, angles, cleaning, state)
+        if safety_stopped:
+            state["safety_paused"] = True
+            completed_rep = False
+        else:
+            if state.pop("safety_paused", False):
+                state["stage_path"] = []
+                state["previous_stage"] = "unknown"
+            completed_rep = self._update_counter(request.exercise, stage, state)
+
+        quality = self._score_quality(request.exercise, cleaning, angles, stage, state)
         training_load = self._assess_training_load(
             quality=quality,
             heart_rate_safety=heart_rate_safety,
@@ -49,8 +59,9 @@ class PoseAlgorithmEngine:
             request=request,
         )
 
-        state["previous_stage"] = stage if stage != "unknown" else state["previous_stage"]
-        if primary_value is not None:
+        if not safety_stopped:
+            state["previous_stage"] = stage if stage != "unknown" else state["previous_stage"]
+        if primary_value is not None and not safety_stopped:
             previous_primary = state.get("previous_primary")
             state["last_primary_delta"] = (
                 abs(primary_value - previous_primary) if previous_primary is not None else None
@@ -91,6 +102,7 @@ class PoseAlgorithmEngine:
                 "last_primary_delta": None,
                 "tracked_center": None,
                 "last_high_knee_side": None,
+                "safety_paused": False,
             }
         return self.states[exercise]
 
