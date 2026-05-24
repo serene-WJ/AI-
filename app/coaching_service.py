@@ -10,6 +10,14 @@ from app.schemas import FrontendEffect, PoseAlgorithmResult
 
 
 def build_frontend_effect(result: PoseAlgorithmResult) -> FrontendEffect:
+    if result.heart_rate_safety and result.heart_rate_safety.status == "stop":
+        return FrontendEffect(
+            name="none",
+            trigger=False,
+            message="stop_training",
+            sound="stop",
+        )
+
     score = result.quality.quality_score
     if score >= 100:
         return FrontendEffect(
