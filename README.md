@@ -305,6 +305,18 @@ POST /pipeline/analyze
 
 `POST /pose/analyze` 用于接收 YOLO pose 或其他姿态模型输出的关键点数据。算法层会先清洗关键点，再计算角度、识别深蹲阶段并更新计数状态机。
 
+当前 `exercise` 支持：
+
+- `squat`：深蹲
+- `push_up`：俯卧撑
+- `lunge`：弓步蹲
+- `plank`：平板支撑
+- `jumping_jack`：开合跳
+- `sit_up`：仰卧起坐
+- `high_knees`：高抬腿
+
+这些动作继续使用同一个接口，不需要前端或其他端更换接口路径。
+
 示例请求：
 
 ```json
