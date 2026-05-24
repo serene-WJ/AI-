@@ -2,13 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-SleepQuality = Literal["poor", "fair", "good"]
+from pydantic import BaseModel, Field, model_validator
 
 
 class ImageSize(BaseModel):
-    model_config = ConfigDict(extra="forbid")
     width: int
     height: int
 
@@ -19,21 +16,10 @@ class NormalizedPoint(BaseModel):
 
 
 class NormalizedBox(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
     x1: float = Field(ge=0.0, le=1.0)
     y1: float = Field(ge=0.0, le=1.0)
     x2: float = Field(ge=0.0, le=1.0)
     y2: float = Field(ge=0.0, le=1.0)
-
-    @model_validator(mode="after")
-    def check_box_order(self) -> NormalizedBox:
-        if self.x1 > self.x2 or self.y1 > self.y2:
-            raise ValueError(
-                f"bbox coordinates out of order: x1={self.x1} > x2={self.x2}" if self.x1 > self.x2
-                else f"bbox coordinates out of order: y1={self.y1} > y2={self.y2}"
-            )
-        return self
 
 
 class SpatialRelation(BaseModel):
@@ -44,11 +30,9 @@ class SpatialRelation(BaseModel):
 
 
 class DetectionObject(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
     object_id: int
     label: str
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float
     bbox: NormalizedBox
     center: NormalizedPoint
     area_ratio: float
@@ -120,9 +104,6 @@ class RawKeypoint(BaseModel):
                 return {"x": data[0], "y": data[1], "confidence": 1.0}
             if len(data) == 3:
                 return {"x": data[0], "y": data[1], "confidence": data[2]}
-            raise ValueError(
-                f"Expected 2 or 3 elements for keypoint, got {len(data)}: {data}"
-            )
         return data
 
 
@@ -144,11 +125,11 @@ class PoseCleaningResult(BaseModel):
     dropped_keypoints: list[str] = Field(default_factory=list)
     interpolated_keypoints: list[str] = Field(default_factory=list)
     abnormal_frame: bool = False
-    confidence_mean: float = Field(default=0.0, ge=0.0, le=1.0)
+    confidence_mean: float = 0.0
 
 
 class QualityAssessment(BaseModel):
-    quality_score: int = Field(ge=0)
+    quality_score: int
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -166,7 +147,7 @@ class TrainingContext(BaseModel):
     current_reps: int = 0
     quality_drop_count: int = 0
     heart_rate_recovery_seconds: int | None = None
-    sleep_quality: SleepQuality = "fair"
+    sleep_quality: Literal["poor", "fair", "good"] = "fair"
     duration_minutes: float = 0.0
     temperature_c: float | None = None
     humidity: float | None = None
@@ -177,7 +158,7 @@ class WatchHealthData(BaseModel):
     session_id: str | None = None
     age: int = Field(default=20, ge=1, le=120)
     heart_rate: int | None = Field(default=None, ge=30, le=240)
-    sleep_quality: SleepQuality = "fair"
+    sleep_quality: Literal["poor", "fair", "good"] = "fair"
     sleep_hours: float | None = Field(default=None, ge=0.0, le=24.0)
     heart_rate_recovery_seconds: int | None = None
     timestamp: float | None = None
@@ -185,6 +166,30 @@ class WatchHealthData(BaseModel):
 
 class WatchHealthResponse(BaseModel):
     health: WatchHealthData | None
+
+
+class ShortcutHeartRateRequest(BaseModel):
+    user_id: str = "default"
+    session_id: str | None = None
+    device_id: str | None = "iphone_health"
+    age: int = Field(default=20, ge=1, le=120)
+    heart_rate: int = Field(ge=30, le=240)
+    unit: str = "bpm"
+    timestamp: float | str | None = None
+    source: str = "ios_shortcuts"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_shortcut_payload(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        for key in ("heartRate", "value", "bpm"):
+            if "heart_rate" not in normalized and key in normalized:
+                normalized["heart_rate"] = normalized[key]
+        return normalized
 
 
 class HealthKitSample(BaseModel):
@@ -223,6 +228,11 @@ class HealthKitImportResponse(BaseModel):
 
 class HealthKitSamplesResponse(BaseModel):
     samples: list[HealthKitSample]
+
+
+class ShortcutHeartRateResponse(BaseModel):
+    health: WatchHealthData
+    sample: HealthKitSample
 
 
 class TrainingLoadResult(BaseModel):
@@ -292,13 +302,76 @@ class PoseAlgorithmResponse(BaseModel):
     result: PoseAlgorithmResult
 
 
+class FrontendEffect(BaseModel):
+    name: Literal["none", "good", "excellent", "perfect"]
+    trigger: bool = False
+    message: str | None = None
+    sound: str | None = None
+    min_score: int | None = None
+
+
+class ActionSnapshot(BaseModel):
+    snapshot_id: str
+    title: str = "动作截图"
+    image_url: str | None = None
+    image_base64: str | None = None
+    frame_index: int | None = None
+    timestamp: float | None = None
+    related_errors: list[str] = Field(default_factory=list)
+    related_strengths: list[str] = Field(default_factory=list)
+    note: str | None = None
+
+
+class TrainingSessionSummary(BaseModel):
+    user_id: str = "default"
+    session_id: str | None = None
+    exercise: str = "squat"
+    started_at: float | None = None
+    ended_at: float | None = None
+    duration_seconds: float | None = None
+    total_reps: int | None = None
+    average_score: float | None = None
+    best_score: int | None = None
+    lowest_score: int | None = None
+
+
 class TrainingReportRequest(BaseModel):
-    result: PoseAlgorithmResult
+    result: PoseAlgorithmResult | None = None
+    results: list[PoseAlgorithmResult] = Field(default_factory=list)
+    session: TrainingSessionSummary = Field(default_factory=TrainingSessionSummary)
+    snapshots: list[ActionSnapshot] = Field(default_factory=list)
+    watch: WatchHealthData | None = None
     goal: str | None = None
+
+    @model_validator(mode="after")
+    def require_results(self) -> "TrainingReportRequest":
+        if self.result is None and not self.results:
+            raise ValueError("Either result or results must be provided.")
+        return self
 
 
 class TrainingReportResponse(BaseModel):
     report: str
+    result: PoseAlgorithmResult | None = None
+    results: list[PoseAlgorithmResult] = Field(default_factory=list)
+    snapshots: list[ActionSnapshot] = Field(default_factory=list)
+
+
+class RealtimeCoachRequest(BaseModel):
+    result: PoseAlgorithmResult
+    user_id: str = "default"
+    session_id: str | None = None
+    scene: SceneObservation | None = None
+    watch: WatchHealthData | None = None
+    style: Literal["coach", "playful", "strict"] = "playful"
+    send_to_voice_agent: bool = True
+
+
+class RealtimeCoachResponse(BaseModel):
+    commentary: str
+    frontend_effect: FrontendEffect
+    voice_forwarded: bool = False
+    voice_response: dict[str, Any] | None = None
     result: PoseAlgorithmResult
 
 
@@ -325,4 +398,3 @@ class PipelineAnalyzeResponse(BaseModel):
     report: str | None = None
     scene: SceneObservation | None = None
     watch: WatchHealthData | None = None
-
