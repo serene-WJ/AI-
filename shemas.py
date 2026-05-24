@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+SleepQuality = Literal["poor", "fair", "good"]
 
 
 class ImageSize(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     width: int
     height: int
 
@@ -16,10 +19,21 @@ class NormalizedPoint(BaseModel):
 
 
 class NormalizedBox(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     x1: float = Field(ge=0.0, le=1.0)
     y1: float = Field(ge=0.0, le=1.0)
     x2: float = Field(ge=0.0, le=1.0)
     y2: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def check_box_order(self) -> NormalizedBox:
+        if self.x1 > self.x2 or self.y1 > self.y2:
+            raise ValueError(
+                f"bbox coordinates out of order: x1={self.x1} > x2={self.x2}" if self.x1 > self.x2
+                else f"bbox coordinates out of order: y1={self.y1} > y2={self.y2}"
+            )
+        return self
 
 
 class SpatialRelation(BaseModel):
@@ -30,9 +44,11 @@ class SpatialRelation(BaseModel):
 
 
 class DetectionObject(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     object_id: int
     label: str
-    confidence: float
+    confidence: float = Field(ge=0.0, le=1.0)
     bbox: NormalizedBox
     center: NormalizedPoint
     area_ratio: float
@@ -104,6 +120,9 @@ class RawKeypoint(BaseModel):
                 return {"x": data[0], "y": data[1], "confidence": 1.0}
             if len(data) == 3:
                 return {"x": data[0], "y": data[1], "confidence": data[2]}
+            raise ValueError(
+                f"Expected 2 or 3 elements for keypoint, got {len(data)}: {data}"
+            )
         return data
 
 
@@ -125,11 +144,11 @@ class PoseCleaningResult(BaseModel):
     dropped_keypoints: list[str] = Field(default_factory=list)
     interpolated_keypoints: list[str] = Field(default_factory=list)
     abnormal_frame: bool = False
-    confidence_mean: float = 0.0
+    confidence_mean: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class QualityAssessment(BaseModel):
-    quality_score: int
+    quality_score: int = Field(ge=0)
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -147,7 +166,7 @@ class TrainingContext(BaseModel):
     current_reps: int = 0
     quality_drop_count: int = 0
     heart_rate_recovery_seconds: int | None = None
-    sleep_quality: Literal["poor", "fair", "good"] = "fair"
+    sleep_quality: SleepQuality = "fair"
     duration_minutes: float = 0.0
     temperature_c: float | None = None
     humidity: float | None = None
@@ -158,7 +177,7 @@ class WatchHealthData(BaseModel):
     session_id: str | None = None
     age: int = Field(default=20, ge=1, le=120)
     heart_rate: int | None = Field(default=None, ge=30, le=240)
-    sleep_quality: Literal["poor", "fair", "good"] = "fair"
+    sleep_quality: SleepQuality = "fair"
     sleep_hours: float | None = Field(default=None, ge=0.0, le=24.0)
     heart_rate_recovery_seconds: int | None = None
     timestamp: float | None = None
@@ -306,3 +325,4 @@ class PipelineAnalyzeResponse(BaseModel):
     report: str | None = None
     scene: SceneObservation | None = None
     watch: WatchHealthData | None = None
+
